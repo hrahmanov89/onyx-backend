@@ -25,7 +25,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.redirect(responseData.redirect_url);
     }
 
-    return new NextResponse(JSON.stringify(responseData), {
+    return new Response(JSON.stringify(responseData), {
       status: response.status,
       headers: response.headers,
     });

@@ -105,12 +105,12 @@ async function handleRequest(request: NextRequest, path: string[]) {
       const { readable, writable } = new TransformStream();
       response.body?.pipeTo(writable);
 
-      return new NextResponse(readable, {
+      return new Response(readable, {
         status: response.status,
         headers: response.headers,
       });
     } else {
-      return new NextResponse(response.body, {
+      return new Response(response.body as BodyInit | null, {
         status: response.status,
         headers: response.headers,
       });

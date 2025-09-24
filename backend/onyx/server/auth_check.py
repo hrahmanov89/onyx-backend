@@ -47,6 +47,9 @@ PUBLIC_ENDPOINT_SPECS = [
     # oauth
     ("/auth/oauth/authorize", {"GET"}),
     ("/auth/oauth/callback", {"GET"}),
+    # oidc - needed for login flow
+    ("/auth/oidc/providers", {"GET"}),
+    ("/auth/oidc/default/authorize", {"GET"}),
     # anonymous user on cloud
     ("/tenants/anonymous-user", {"POST"}),
     ("/metrics", {"GET"}),  # added by prometheus_fastapi_instrumentator
@@ -58,6 +61,10 @@ def is_route_in_spec_list(
 ) -> bool:
     if not hasattr(route, "path") or not hasattr(route, "methods"):
         return False
+
+    # Check for OIDC routes which should all be public for authentication flow
+    if hasattr(route, "path") and "/auth/oidc/" in route.path:
+        return True
 
     # try adding the prefix AND not adding the prefix, since some endpoints
     # are not prefixed (e.g. /openapi.json)

@@ -55,7 +55,7 @@ export const getAuthDisabledSS = async (): Promise<boolean> => {
 };
 
 const getOIDCAuthUrlSS = async (nextUrl: string | null): Promise<string> => {
-  const url = UrlBuilder.fromInternalUrl("/auth/oidc/authorize");
+  const url = UrlBuilder.fromInternalUrl("/auth/oidc/default/authorize");
   if (nextUrl) {
     url.addParam("next", nextUrl);
   }

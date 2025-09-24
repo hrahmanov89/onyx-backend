@@ -37,7 +37,7 @@ from fastapi_users import schemas
 from fastapi_users import UUIDIDMixin
 from fastapi_users.authentication import AuthenticationBackend
 from fastapi_users.authentication import CookieTransport
-from fastapi_users.authentication import RedisStrategy
+# RedisStrategy removed in fastapi-users v14; using custom tenant-aware store below
 from fastapi_users.authentication import Strategy
 from fastapi_users.authentication.strategy.db import AccessTokenDatabase
 from fastapi_users.authentication.strategy.db import DatabaseStrategy
@@ -134,10 +134,10 @@ def is_user_admin(user: User | None) -> bool:
 
 
 def verify_auth_setting() -> None:
-    if AUTH_TYPE not in [AuthType.DISABLED, AuthType.BASIC, AuthType.GOOGLE_OAUTH]:
+    if AUTH_TYPE not in [AuthType.DISABLED, AuthType.BASIC, AuthType.GOOGLE_OAUTH, AuthType.OIDC, AuthType.SAML]:
         raise ValueError(
             "User must choose a valid user authentication method: "
-            "disabled, basic, or google_oauth"
+            "disabled, basic, google_oauth, oidc, or saml"
         )
     logger.notice(f"Using Auth Type: {AUTH_TYPE.value}")
 
@@ -751,7 +751,7 @@ class RefreshableStrategy(Protocol):
         ...
 
 
-class TenantAwareRedisStrategy(RedisStrategy[User, uuid.UUID]):
+class TenantAwareRedisStrategy(Strategy[User, uuid.UUID]):
     """
     A custom strategy that fetches the actual async Redis connection inside each method.
     We do NOT pass a synchronous or "coroutine" redis object to the constructor.
@@ -1204,6 +1204,28 @@ def get_oauth_router(
     is_verified_by_default: bool = False,
 ) -> APIRouter:
     """Generate a router with the OAuth routes."""
+    # --- BEGIN NAME SANITIZATION ---
+    client_name = getattr(oauth_client, "name", None)
+    if not isinstance(client_name, str) or client_name.strip() == "" or (isinstance(client_name, str) and client_name.startswith("[") and client_name.endswith("]")):
+        derived_name = None
+        if redirect_url:
+            parts = [p for p in redirect_url.split('/') if p]
+            if 'oidc' in parts:
+                try:
+                    idx = parts.index('oidc')
+                    if len(parts) > idx + 1:
+                        cand = parts[idx + 1]
+                        if cand not in ("callback", "authorize"):
+                            derived_name = cand
+                except Exception:  # pragma: no cover
+                    pass
+        client_name = derived_name or "default"
+        try:
+            setattr(oauth_client, "name", client_name)
+        except Exception:  # pragma: no cover
+            pass
+    # --- END NAME SANITIZATION ---
+
     router = APIRouter()
     callback_route_name = f"oauth:{oauth_client.name}.{backend.name}.callback"
 
@@ -1249,11 +1271,34 @@ def get_oauth_router(
             scopes,
         )
 
-        # For Google OAuth, add parameters to request refresh tokens
-        if oauth_client.name == "google":
-            authorization_url = add_url_params(
-                authorization_url, {"access_type": "offline", "prompt": "consent"}
-            )
+        # Merge provider.additional_params if available
+        try:
+            from onyx.auth.oidc_providers import oidc_registry
+
+            provider_name = getattr(oauth_client, "name", None) or "default"
+            provider = oidc_registry.get_provider(provider_name)
+            if provider and provider.additional_params:
+                authorization_url = add_url_params(
+                    authorization_url, provider.additional_params
+                )
+        except Exception:
+            # Best-effort; do not block authorize on registry issues
+            pass
+
+        # For Google OAuth, add parameters to request refresh tokens (avoid duplicates)
+        if getattr(oauth_client, "name", None) == "google":
+            extra_params = {"access_type": "offline", "prompt": "consent"}
+            # Only add if not already present in URL
+            parsed_already = False
+            try:
+                from urllib.parse import urlparse, parse_qs
+
+                qs = parse_qs(urlparse(authorization_url).query)
+                parsed_already = all(k in qs for k in extra_params.keys())
+            except Exception:
+                parsed_already = False
+            if not parsed_already:
+                authorization_url = add_url_params(authorization_url, extra_params)
 
         return OAuth2AuthorizeResponse(authorization_url=authorization_url)
 
@@ -1303,8 +1348,9 @@ def get_oauth_router(
 
         try:
             state_data = decode_jwt(state, state_secret, [STATE_TOKEN_AUDIENCE])
-        except jwt.DecodeError:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            # Invalid or expired state token
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="INVALID_STATE_TOKEN")
 
         next_url = state_data.get("next_url", "/")
         referral_source = state_data.get("referral_source", None)

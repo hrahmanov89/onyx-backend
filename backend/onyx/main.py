@@ -18,6 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 from httpx_oauth.clients.google import GoogleOAuth2
+from httpx_oauth.clients.openid import OpenID
 from prometheus_fastapi_instrumentator import Instrumentator
 from sentry_sdk.integrations.fastapi import FastApiIntegration
 from sentry_sdk.integrations.starlette import StarletteIntegration
@@ -30,6 +31,8 @@ from onyx.auth.schemas import UserUpdate
 from onyx.auth.users import auth_backend
 from onyx.auth.users import create_onyx_oauth_router
 from onyx.auth.users import fastapi_users
+from onyx.auth.oidc_auth import setup_oidc_auth
+from onyx.auth.oidc_api import router as oidc_provider_router
 from onyx.configs.app_configs import APP_API_PREFIX
 from onyx.configs.app_configs import APP_HOST
 from onyx.configs.app_configs import APP_PORT
@@ -436,6 +439,13 @@ def get_application(lifespan_override: Lifespan | None = None) -> FastAPI:
             fastapi_users.get_logout_router(auth_backend),
             prefix="/auth",
         )
+        
+    if AUTH_TYPE == AuthType.OIDC:
+        # Set up OIDC authentication with support for multiple providers
+        setup_oidc_auth(application)
+        
+        # Include the API for managing OIDC providers
+        include_router_with_global_prefix_prepended(application, oidc_provider_router)
 
     if (
         AUTH_TYPE == AuthType.CLOUD
